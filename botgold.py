@@ -24,7 +24,7 @@ LINKS_FILE    = 'posted_links.json'
 USERS_FILE    = 'subscribed_users.json'
 
 # ключевые слова для фильтрации (в lower)
-KEYWORDS      = ['золото', 'gold', 'серебро', 'silver', 'сша']
+KEYWORDS      = ['золото', 'gold', 'серебро', 'silver', 'золота', 'серебра']
 # сколько последних записей шлём при подписке
 SEND_LAST_N   = 5
 
