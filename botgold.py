@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # ——————————————————————————————————————————————————————————
 #           НАСТРОЙКИ
 # ——————————————————————————————————————————————————————————
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '8043165443:AAEPLt5HVSlWUMUNAJIknBwxMFl1UwZcei8')
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '7826525577:AAGCtpXb49cwXAbJbvf0frofzAwslvQMl6c')
 LINKS_FILE    = 'posted_links.json'
 USERS_FILE    = 'subscribed_users.json'
 
