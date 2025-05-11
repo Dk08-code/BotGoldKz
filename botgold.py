@@ -2,6 +2,7 @@ import os
 import logging
 import urllib.parse
 import sqlite3
+import re
 from contextlib import closing
 
 import feedparser
@@ -16,9 +17,6 @@ from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, Con
 # ——————————————————————————————————————————————————————————
 DB_PATH = 'botdata.sqlite'
 
-# ——————————————————————————————————————————————————————————
-#      ФУНКЦИИ РАБОТЫ С БАЗОЙ (SQLite)
-# ——————————————————————————————————————————————————————————
 def init_db():
     with closing(sqlite3.connect(DB_PATH)) as conn:
         cur = conn.cursor()
@@ -34,32 +32,28 @@ def init_db():
         ''')
         conn.commit()
 
-        logging.info("SQLite: БД и таблицы инициализированы")
-
-
+# ——————————————————————————————————————————————————————————
+#         РАБОТА С БАЗОЙ (SQLite)
+# ——————————————————————————————————————————————————————————
 def add_subscriber(chat_id: int):
     with closing(sqlite3.connect(DB_PATH)) as conn:
         conn.execute('INSERT OR IGNORE INTO subscribers(chat_id) VALUES(?)', (chat_id,))
         conn.commit()
-
 
 def remove_subscriber(chat_id: int):
     with closing(sqlite3.connect(DB_PATH)) as conn:
         conn.execute('DELETE FROM subscribers WHERE chat_id = ?', (chat_id,))
         conn.commit()
 
-
 def get_subscribers() -> list[int]:
     with closing(sqlite3.connect(DB_PATH)) as conn:
         cur = conn.execute('SELECT chat_id FROM subscribers')
         return [row[0] for row in cur]
 
-
 def has_link(link: str) -> bool:
     with closing(sqlite3.connect(DB_PATH)) as conn:
         cur = conn.execute('SELECT 1 FROM posted_links WHERE link = ?', (link,))
         return cur.fetchone() is not None
-
 
 def add_link(link: str):
     with closing(sqlite3.connect(DB_PATH)) as conn:
@@ -78,7 +72,7 @@ logger = logging.getLogger(__name__)
 # ——————————————————————————————————————————————————————————
 #           НАСТРОЙКИ БОТА
 # ——————————————————————————————————————————————————————————
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '7826525577:AAGCtpXb49cwXAbJbvf0frofzAwslvQMl6c')
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', 'ТВОЙ_ТОКЕН')
 
 KEYWORDS = ['золото', 'gold', 'серебро', 'silver', 'золота', 'серебра']
 SEND_LAST_N = 5
@@ -104,33 +98,37 @@ bot = Bot(token=TELEGRAM_TOKEN)
 translator = GoogleTranslator(source='auto', target='ru')
 
 # ——————————————————————————————————————————————————————————
-#       ФУНКЦИЯ ДЛЯ ВЫЯСНЕНИЯ ЧИСТОГО URL
+#       ФУНКЦИЯ ФИЛЬТРАЦИИ ССЫЛОК
 # ——————————————————————————————————————————————————————————
 def extract_real_link(entry):
-    link = entry.get('link', '')
-    parsed = urllib.parse.urlparse(link)
-    if link and 'biztoc.com' not in parsed.netloc and 'feedproxy.google' not in parsed.netloc:
-        return link
+    def is_valid(link: str) -> bool:
+        if not link:
+            return False
+        if any(domain in link for domain in ['biztoc.com', 'feedproxy.google', 'rss']):
+            return False
+        if re.fullmatch(r'https?://[^/]+/?', link):  # главная страница
+            return False
+        return True
 
-    orig = entry.get('id', '')
-    parsed = urllib.parse.urlparse(orig)
-    if orig and 'biztoc.com' not in parsed.netloc:
-        return orig
+    candidates = [
+        entry.get('link', ''),
+        entry.get('id', '')
+    ]
 
     for lobj in entry.get('links', []):
-        href = lobj.get('href', '')
-        p = urllib.parse.urlparse(href)
-        if href and 'biztoc.com' not in p.netloc and 'feedproxy.google' not in p.netloc:
-            return href
+        candidates.append(lobj.get('href', ''))
 
     desc = entry.get('description', '')
     if desc:
         soup = BeautifulSoup(desc, 'html.parser')
         a = soup.find('a', href=True)
         if a:
-            return a['href']
+            candidates.append(a['href'])
 
-    return link
+    for c in candidates:
+        if is_valid(c):
+            return c
+    return ''
 
 # ——————————————————————————————————————————————————————————
 #            КОМАНДЫ БОТА
@@ -158,7 +156,7 @@ async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     l = extract_real_link(entry)
                     if not t or not l: continue
                     if any(k in t.lower() for k in KEYWORDS):
-                        rt = translator.translate(t) if t else t
+                        rt = translator.translate(t)
                         await bot.send_message(uid, f"{rt}\n{l}")
                         count += 1
                         if count >= SEND_LAST_N:
@@ -185,7 +183,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await subscribe(update, context)
 
 # ——————————————————————————————————————————————————————————
-#        ФУНКЦИЯ ПАРСИНГА И РАССЫЛКИ НОВОСТЕЙ
+#         РАССЫЛКА СВЕЖИХ НОВОСТЕЙ
 # ——————————————————————————————————————————————————————————
 async def fetch_and_post_news(context: ContextTypes.DEFAULT_TYPE):
     logger.info("=== Запуск fetch_and_post_news ===")
@@ -193,13 +191,12 @@ async def fetch_and_post_news(context: ContextTypes.DEFAULT_TYPE):
         try:
             resp = requests.get(url, headers={'User-Agent':'Mozilla/5.0'})
             feed = feedparser.parse(resp.content)
-            logger.info(f"[DEBUG] {url}: HTTP {resp.status_code}, entries={len(feed.entries)}")
             for entry in feed.entries:
                 t = entry.get('title','')
                 l = extract_real_link(entry)
                 if not t or not l or has_link(l): continue
                 if any(k in t.lower() for k in KEYWORDS):
-                    rt = translator.translate(t) if t else t
+                    rt = translator.translate(t)
                     txt = f"{rt}\n{l}"
                     for uid in get_subscribers():
                         try:
