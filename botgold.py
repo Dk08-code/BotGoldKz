@@ -7,6 +7,7 @@ from contextlib import closing
 
 import feedparser
 import requests
+from feedgen.feed import FeedGenerator
 from bs4 import BeautifulSoup
 from deep_translator import GoogleTranslator
 from telegram import Update, Bot
@@ -189,23 +190,43 @@ async def fetch_and_post_news(context: ContextTypes.DEFAULT_TYPE):
     logger.info("=== Запуск fetch_and_post_news ===")
     for url in RSS_FEEDS:
         try:
+            # Попытка получить RSS-канал
             resp = requests.get(url, headers={'User-Agent':'Mozilla/5.0'})
             feed = feedparser.parse(resp.content)
-            for entry in feed.entries:
-                t = entry.get('title','')
-                l = extract_real_link(entry)
-                if not t or not l or has_link(l): continue
-                if any(k in t.lower() for k in KEYWORDS):
-                    rt = translator.translate(t)
-                    txt = f"{rt}\n{l}"
-                    for uid in get_subscribers():
-                        try:
-                            await bot.send_message(uid, txt)
-                        except Exception as e:
-                            logger.error(f"Не отправлено {uid}: {e}")
-                    add_link(l)
+
+            # Если RSS не доступен, пробуем парсить сайт вручную
+            if not feed.entries:
+                logger.info(f"Не удалось получить RSS с {url}, пытаемся парсить сайт вручную")
+                articles = extract_articles_from_site(url)
+                if articles:
+                    fg = create_rss_from_articles(articles, url)
+                    for entry in fg.entries():
+                        title = entry.title
+                        link = entry.link
+                        txt = f"{title}\n{link}"
+                        for uid in get_subscribers():
+                            try:
+                                await bot.send_message(uid, txt)
+                            except Exception as e:
+                                logger.error(f"Не отправлено {uid}: {e}")
+            else:
+                for entry in feed.entries:
+                    t = entry.get('title', '')
+                    l = extract_real_link(entry)
+                    if not t or not l or has_link(l): continue
+                    if any(k in t.lower() for k in KEYWORDS):
+                        rt = translator.translate(t)
+                        txt = f"{rt}\n{l}"
+                        for uid in get_subscribers():
+                            try:
+                                await bot.send_message(uid, txt)
+                            except Exception as e:
+                                logger.error(f"Не отправлено {uid}: {e}")
+                        add_link(l)
+
         except Exception as e:
             logger.error(f"Ошибка фида {url}: {e}")
+
 
 # ——————————————————————————————————————————————————————————
 #             ЗАПУСК БОТА
