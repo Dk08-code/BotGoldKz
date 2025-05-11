@@ -1,21 +1,37 @@
 import feedparser
 import requests
 from bs4 import BeautifulSoup
-from telegram import Bot, Update
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
+from telegram import Bot
+from telegram.ext import ApplicationBuilder, ContextTypes
 import sqlite3
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 import logging
+from dotenv import load_dotenv
+import os
+
+# Загружаем переменные окружения из .env файла
+load_dotenv()
 
 # Setup logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize translator
-translator = Translator()
+# Database setup
+conn = sqlite3.connect('news.db')
+c = conn.cursor()
+c.execute('''CREATE TABLE IF NOT EXISTS sent_links (link TEXT PRIMARY KEY)''')
+conn.commit()
+
+def has_link(link):
+    c.execute("SELECT 1 FROM sent_links WHERE link=?", (link,))
+    return c.fetchone() is not None
+
+def add_link(link):
+    c.execute("INSERT INTO sent_links (link) VALUES (?)", (link,))
+    conn.commit()
 
 # Commodity keywords
-KEYWORDS = ['золото', 'горнодобывающая', 'gold', 'mining', 'commodities', 'metals']
+KEYWORDS = ['золото', 'нефть', 'горнодобывающая', 'gold', 'oil', 'mining', 'commodities', 'metals', 'energy']
 
 # RSS sources
 RSS_SOURCES = {
@@ -30,6 +46,7 @@ RSS_SOURCES = {
     'https://mining.com': 'https://mining.com/feed',
 }
 
+# English sources requiring translation
 ENGLISH_SOURCES = ['https://www.kitco.com', 'https://www.reuters.com', 'https://www.gold.org', 'https://mining.com']
 
 # Custom scrapers
@@ -50,59 +67,14 @@ def scrape_finprom():
 
 SITE_SCRAPERS = {
     'https://finprom.kz': scrape_finprom,
+    # Add more scrapers for kegoc.kz, gov.kz, etc., as needed
 }
 
-# Database helpers
-def get_db_connection():
-    return sqlite3.connect('news.db')
-
-def init_db():
-    with get_db_connection() as conn:
-        c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS sent_links (link TEXT PRIMARY KEY)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS subscribers (user_id INTEGER PRIMARY KEY)''')
-        conn.commit()
-
-def has_link(link):
-    with get_db_connection() as conn:
-        c = conn.cursor()
-        c.execute("SELECT 1 FROM sent_links WHERE link=?", (link,))
-        return c.fetchone() is not None
-
-def add_link(link):
-    with get_db_connection() as conn:
-        c = conn.cursor()
-        c.execute("INSERT INTO sent_links (link) VALUES (?)", (link,))
-        conn.commit()
-
-def get_subscribers():
-    with get_db_connection() as conn:
-        c = conn.cursor()
-        c.execute("SELECT user_id FROM subscribers")
-        return [row[0] for row in c.fetchall()]
-
-def add_subscriber(user_id):
-    with get_db_connection() as conn:
-        c = conn.cursor()
-        c.execute("INSERT OR IGNORE INTO subscribers (user_id) VALUES (?)", (user_id,))
-        conn.commit()
-
-def remove_subscriber(user_id):
-    with get_db_connection() as conn:
-        c = conn.cursor()
-        c.execute("DELETE FROM subscribers WHERE user_id=?", (user_id,))
-        conn.commit()
-
-# Telegram handlers
-async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_chat.id
-    add_subscriber(user_id)
-    await context.bot.send_message(chat_id=user_id, text="Вы подписались на новости.")
-
-async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_chat.id
-    remove_subscriber(user_id)
-    await context.bot.send_message(chat_id=user_id, text="Вы отписались от новостей.")
+# Функция для перевода текста
+def translate_text(text, url):
+    if url in ENGLISH_SOURCES:
+        return GoogleTranslator(source='auto', target='ru').translate(text)
+    return text
 
 async def fetch_and_post_news(context: ContextTypes.DEFAULT_TYPE):
     all_sources = list(RSS_SOURCES.keys()) + list(SITE_SCRAPERS.keys())
@@ -113,30 +85,27 @@ async def fetch_and_post_news(context: ContextTypes.DEFAULT_TYPE):
                 articles = [{'title': entry.title, 'link': entry.link} for entry in feed.entries]
             else:
                 articles = SITE_SCRAPERS[url]()
-
+            
             for article in articles:
                 t = article['title']
                 l = article['link']
                 if not t or not l or has_link(l):
                     continue
                 if any(k in t.lower() for k in KEYWORDS):
-                    rt = translator.translate(t, dest='ru').text if url in ENGLISH_SOURCES else t
+                    rt = translate_text(t, url)
                     txt = f"<b>{rt}</b>\n{l}"
-                    for uid in get_subscribers():
+                    # Заменить на реальную логику получения подписчиков
+                    for uid in [-1008043165443]:  # Placeholder: implement get_subscribers()
                         await context.bot.send_message(chat_id=uid, text=txt, parse_mode='HTML')
                     add_link(l)
         except Exception as e:
             logger.error(f"Error processing {url}: {e}")
 
-# Token and start
-TELEGRAM_TOKEN = '7826525577:AAGCtpXb49cwXAbJbvf0frofzAwslvQMl6c'
+# Bot setup
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+bot = Bot(TELEGRAM_TOKEN)
 
 if __name__ == '__main__':
-    init_db()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
-    app.add_handler(CommandHandler("subscribe", subscribe))
-    app.add_handler(CommandHandler("unsubscribe", unsubscribe))
-
     app.job_queue.run_repeating(fetch_and_post_news, interval=1800, first=0)
     app.run_polling()
