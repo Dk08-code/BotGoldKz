@@ -72,7 +72,7 @@ logger = logging.getLogger(__name__)
 # ——————————————————————————————————————————————————————————
 #           НАСТРОЙКИ БОТА
 # ——————————————————————————————————————————————————————————
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', 'ТВОЙ_ТОКЕН')
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '7826525577:AAGCtpXb49cwXAbJbvf0frofzAwslvQMl6c')
 
 KEYWORDS = ['золото', 'gold', 'серебро', 'silver', 'золота', 'серебра']
 SEND_LAST_N = 5
