@@ -1,45 +1,71 @@
 import os
-import json
 import logging
+import urllib.parse
+import sqlite3
+from contextlib import closing
+
 import feedparser
 import requests
+from bs4 import BeautifulSoup
 from deep_translator import GoogleTranslator
 from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 
+# ——————————————————————————————————————————————————————————
+#            НАСТРОЙКИ БД
+# ——————————————————————————————————————————————————————————
+DB_PATH = 'botdata.sqlite'
+
+# ——————————————————————————————————————————————————————————
+#      ФУНКЦИИ РАБОТЫ С БАЗОЙ (SQLite)
+# ——————————————————————————————————————————————————————————
+def init_db():
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        cur = conn.cursor()
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS subscribers (
+                chat_id INTEGER PRIMARY KEY
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS posted_links (
+                link TEXT PRIMARY KEY
+            )
+        ''')
+        conn.commit()
+
+        logging.info("SQLite: БД и таблицы инициализированы")
 
 
-def extract_real_link(entry):
-    # 1) пробуем entry.link
-    link = entry.get('link', '')
-    parsed = urllib.parse.urlparse(link)
-    if link and 'biztoc.com' not in parsed.netloc and 'feedproxy.google' not in parsed.netloc:
-        return link
+def add_subscriber(chat_id: int):
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        conn.execute('INSERT OR IGNORE INTO subscribers(chat_id) VALUES(?)', (chat_id,))
+        conn.commit()
 
-    # 2) пробуем entry.id
-    orig = entry.get('id', '')
-    parsed = urllib.parse.urlparse(orig)
-    if orig and 'biztoc.com' not in parsed.netloc:
-        return orig
 
-    # 3) пробуем все entry.links
-    for lobj in entry.get('links', []):
-        href = lobj.get('href', '')
-        p = urllib.parse.urlparse(href)
-        if href and 'biztoc.com' not in p.netloc and 'feedproxy.google' not in p.netloc:
-            return href
+def remove_subscriber(chat_id: int):
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        conn.execute('DELETE FROM subscribers WHERE chat_id = ?', (chat_id,))
+        conn.commit()
 
-    # 4) парсим HTML описания и берём первую <a href=…>
-    desc = entry.get('description', '')
-    if desc:
-        soup = BeautifulSoup(desc, 'html.parser')
-        a = soup.find('a', href=True)
-        if a:
-            return a['href']
 
-    # 5) иначе возвращаем исходную ссылку
-    return link
-    
+def get_subscribers() -> list[int]:
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        cur = conn.execute('SELECT chat_id FROM subscribers')
+        return [row[0] for row in cur]
+
+
+def has_link(link: str) -> bool:
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        cur = conn.execute('SELECT 1 FROM posted_links WHERE link = ?', (link,))
+        return cur.fetchone() is not None
+
+
+def add_link(link: str):
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        conn.execute('INSERT OR IGNORE INTO posted_links(link) VALUES(?)', (link,))
+        conn.commit()
+
 # ——————————————————————————————————————————————————————————
 #            ЛОГИРОВАНИЕ
 # ——————————————————————————————————————————————————————————
@@ -50,55 +76,61 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ——————————————————————————————————————————————————————————
-#           НАСТРОЙКИ
+#           НАСТРОЙКИ БОТА
 # ——————————————————————————————————————————————————————————
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '7826525577:AAGCtpXb49cwXAbJbvf0frofzAwslvQMl6c')
-LINKS_FILE    = 'posted_links.json'
-USERS_FILE    = 'subscribed_users.json'
 
-# ключевые слова для фильтрации (в lower)
-KEYWORDS      = ['золото', 'gold', 'серебро', 'silver', 'золота', 'серебра']
-# сколько последних записей шлём при подписке
-SEND_LAST_N   = 5
-
-# RSS‑эндпойнты ваших источников:
+KEYWORDS = ['золото', 'gold', 'серебро', 'silver', 'золота', 'серебра']
+SEND_LAST_N = 5
 RSS_FEEDS = [
-    # 🇰🇿 Казахстан
-    "https://kursiv.kz/rss",                 # Kursiv.kz — бизнес‑новости
-    "https://informburo.kz/feed/",           # Informburo.kz — общий WordPress‑фид
-    "https://kz.kursiv.media/feed/",         # Kursiv Media Kazakhstan
-    "https://kapital.kz/rss",                # Kapital.kz — RSS
-    "https://inbusiness.kz/ru/rss/all",      # Inbusiness.kz — все новости
-    "https://finprom.kz/rss",                # Finprom.kz — статистика (если есть)
-    "https://kegoc.kz/rss",                  # KEGOC — регуляторные обновления
-    "https://gov.kz/rss",                    # Gov.kz — правительственные RSS
-
-    # 🌐 Global
-    "https://www.kitco.com/news/rss",                          # Kitco News
-    "http://feeds.feedburner.com/reuters/businessNews",        # Reuters Business News
-    "https://www.gold.org/news/rss",                           # World Gold Council
-    "https://www.mining.com/feed/",                            # Mining.com
-    "https://www.statista.com/rss",                            # Statista (общий RSS)
-    "https://www.bloomberg.com/markets/economics/rss",         # Bloomberg Markets & Economics
-    "https://www.ft.com/commodities?format=rss"                # FT Commodities
+    "https://kursiv.kz/rss",
+    "https://informburo.kz/feed/",
+    "https://kz.kursiv.media/feed/",
+    "https://kapital.kz/rss",
+    "https://inbusiness.kz/ru/rss/all",
+    "https://finprom.kz/rss",
+    "https://kegoc.kz/rss",
+    "https://gov.kz/rss",
+    "https://www.kitco.com/news/rss",
+    "http://feeds.feedburner.com/reuters/businessNews",
+    "https://www.gold.org/news/rss",
+    "https://www.mining.com/feed/",
+    "https://www.statista.com/rss",
+    "https://www.bloomberg.com/markets/economics/rss",
+    "https://www.ft.com/commodities?format=rss"
 ]
-
-# ——————————————————————————————————————————————————————————
-#            ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-# ——————————————————————————————————————————————————————————
-def load_json(path):
-    try:
-        with open(path, 'r') as f: return set(json.load(f))
-    except: return set()
-
-def save_json(data, path):
-    with open(path, 'w') as f: json.dump(list(data), f)
-
-posted_links    = load_json(LINKS_FILE)
-subscribed_users = load_json(USERS_FILE)
 
 bot = Bot(token=TELEGRAM_TOKEN)
 translator = GoogleTranslator(source='auto', target='ru')
+
+# ——————————————————————————————————————————————————————————
+#       ФУНКЦИЯ ДЛЯ ВЫЯСНЕНИЯ ЧИСТОГО URL
+# ——————————————————————————————————————————————————————————
+def extract_real_link(entry):
+    link = entry.get('link', '')
+    parsed = urllib.parse.urlparse(link)
+    if link and 'biztoc.com' not in parsed.netloc and 'feedproxy.google' not in parsed.netloc:
+        return link
+
+    orig = entry.get('id', '')
+    parsed = urllib.parse.urlparse(orig)
+    if orig and 'biztoc.com' not in parsed.netloc:
+        return orig
+
+    for lobj in entry.get('links', []):
+        href = lobj.get('href', '')
+        p = urllib.parse.urlparse(href)
+        if href and 'biztoc.com' not in p.netloc and 'feedproxy.google' not in p.netloc:
+            return href
+
+    desc = entry.get('description', '')
+    if desc:
+        soup = BeautifulSoup(desc, 'html.parser')
+        a = soup.find('a', href=True)
+        if a:
+            return a['href']
+
+    return link
 
 # ——————————————————————————————————————————————————————————
 #            КОМАНДЫ БОТА
@@ -113,27 +145,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if uid not in subscribed_users:
-        subscribed_users.add(uid)
-        save_json(subscribed_users, USERS_FILE)
+    if uid not in get_subscribers():
+        add_subscriber(uid)
         await update.message.reply_text("Вы подписались! Отправляю последние новости…")
+        count = 0
         for url in RSS_FEEDS:
             try:
                 resp = requests.get(url, headers={'User-Agent':'Mozilla/5.0'})
                 feed = feedparser.parse(resp.content)
-                count = 0
                 for entry in feed.entries:
                     t = entry.get('title','')
-                    l = entry.get('link','')
-                    if t and l and any(k in t.lower() for k in KEYWORDS):
-                        # всегда переводим на русский
-                        try:
-                            rt = translator.translate(t)
-                        except:
-                            rt = t
+                    l = extract_real_link(entry)
+                    if not t or not l: continue
+                    if any(k in t.lower() for k in KEYWORDS):
+                        rt = translator.translate(t) if t else t
                         await bot.send_message(uid, f"{rt}\n{l}")
                         count += 1
-                        if count >= SEND_LAST_N: break
+                        if count >= SEND_LAST_N:
+                            return
             except Exception as e:
                 logger.error(f"Ошибка при отправке исторических новостей {url}: {e}")
     else:
@@ -141,9 +170,8 @@ async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if uid in subscribed_users:
-        subscribed_users.remove(uid)
-        save_json(subscribed_users, USERS_FILE)
+    if uid in get_subscribers():
+        remove_subscriber(uid)
         await update.message.reply_text("Вы отписались.")
     else:
         await update.message.reply_text("Вы не были подписаны.")
@@ -169,19 +197,16 @@ async def fetch_and_post_news(context: ContextTypes.DEFAULT_TYPE):
             for entry in feed.entries:
                 t = entry.get('title','')
                 l = extract_real_link(entry)
-                if not t or not l or l in posted_links: continue
+                if not t or not l or has_link(l): continue
                 if any(k in t.lower() for k in KEYWORDS):
-                    # переводим всегда на русский
-                    try:
-                        rt = translator.translate(t)
-                    except:
-                        rt = t
+                    rt = translator.translate(t) if t else t
                     txt = f"{rt}\n{l}"
-                    for uid in list(subscribed_users):
-                        try: await bot.send_message(uid, txt)
-                        except Exception as e: logger.error(f"Не отправлено {uid}: {e}")
-                    posted_links.add(l)
-            save_json(posted_links, LINKS_FILE)
+                    for uid in get_subscribers():
+                        try:
+                            await bot.send_message(uid, txt)
+                        except Exception as e:
+                            logger.error(f"Не отправлено {uid}: {e}")
+                    add_link(l)
         except Exception as e:
             logger.error(f"Ошибка фида {url}: {e}")
 
@@ -189,6 +214,7 @@ async def fetch_and_post_news(context: ContextTypes.DEFAULT_TYPE):
 #             ЗАПУСК БОТА
 # ——————————————————————————————————————————————————————————
 if __name__ == '__main__':
+    init_db()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('subscribe', subscribe))
