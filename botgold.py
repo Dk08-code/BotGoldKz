@@ -131,34 +131,6 @@ def extract_real_link(entry):
     return ''
 
 # ——————————————————————————————————————————————————————————
-#           ПАРСИНГ САЙТОВ БЕЗ RSS
-# ——————————————————————————————————————————————————————————
-def parse_site_without_rss(url: str):
-    try:
-        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
-        if response.status_code != 200:
-            return []
-
-        soup = BeautifulSoup(response.content, 'html.parser')
-        articles = []
-
-        # Пример: на сайте новости могут быть в тегах <h2> или <div class="news-item">
-        for item in soup.find_all(['h2', 'div'], class_='news-item'):  # Измените на правильные теги и классы для конкретного сайта
-            title = item.get_text(strip=True)
-            link = item.find('a', href=True)
-            if link:
-                link = link['href']
-                if link.startswith('http'):
-                    articles.append((title, link))
-                else:
-                    articles.append((title, urllib.parse.urljoin(url, link)))
-
-        return articles
-    except Exception as e:
-        logger.error(f"Ошибка при парсинге {url}: {e}")
-        return []
-
-# ——————————————————————————————————————————————————————————
 #            КОМАНДЫ БОТА
 # ——————————————————————————————————————————————————————————
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -190,21 +162,7 @@ async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if count >= SEND_LAST_N:
                             return
             except Exception as e:
-                logger.error(f"Ошибка при отправке новостей {url}: {e}")
-        
-        # Парсинг сайтов без RSS
-        non_rss_sites = [
-            "https://example-site1.com",
-            "https://example-site2.com"
-        ]
-        for site in non_rss_sites:
-            articles = parse_site_without_rss(site)
-            for title, link in articles:
-                rt = translator.translate(title)
-                await bot.send_message(uid, f"{rt}\n{link}")
-                count += 1
-                if count >= SEND_LAST_N:
-                    return
+                logger.error(f"Ошибка при отправке исторических новостей {url}: {e}")
     else:
         await update.message.reply_text("Вы уже подписаны.")
 
@@ -254,4 +212,14 @@ async def fetch_and_post_news(context: ContextTypes.DEFAULT_TYPE):
 # ——————————————————————————————————————————————————————————
 if __name__ == '__main__':
     init_db()
-    app = ApplicationBuilder().token(
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('subscribe', subscribe))
+    app.add_handler(CommandHandler('unsubscribe', unsubscribe))
+    app.add_handler(CommandHandler('news', news))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    app.job_queue.run_once(fetch_and_post_news, when=1)
+    app.job_queue.run_repeating(fetch_and_post_news, interval=1800, first=0)
+
+    app.run_polling()
