@@ -102,7 +102,7 @@ async def fetch_and_post_news(context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error processing {url}: {e}")
 
 # Bot setup
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+TELEGRAM_TOKEN = os.getenv('7826525577:AAGCtpXb49cwXAbJbvf0frofzAwslvQMl6c')
 bot = Bot(TELEGRAM_TOKEN)
 
 if __name__ == '__main__':
