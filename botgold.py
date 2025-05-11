@@ -7,6 +7,39 @@ from deep_translator import GoogleTranslator
 from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 
+
+
+def extract_real_link(entry):
+    # 1) пробуем entry.link
+    link = entry.get('link', '')
+    parsed = urllib.parse.urlparse(link)
+    if link and 'biztoc.com' not in parsed.netloc and 'feedproxy.google' not in parsed.netloc:
+        return link
+
+    # 2) пробуем entry.id
+    orig = entry.get('id', '')
+    parsed = urllib.parse.urlparse(orig)
+    if orig and 'biztoc.com' not in parsed.netloc:
+        return orig
+
+    # 3) пробуем все entry.links
+    for lobj in entry.get('links', []):
+        href = lobj.get('href', '')
+        p = urllib.parse.urlparse(href)
+        if href and 'biztoc.com' not in p.netloc and 'feedproxy.google' not in p.netloc:
+            return href
+
+    # 4) парсим HTML описания и берём первую <a href=…>
+    desc = entry.get('description', '')
+    if desc:
+        soup = BeautifulSoup(desc, 'html.parser')
+        a = soup.find('a', href=True)
+        if a:
+            return a['href']
+
+    # 5) иначе возвращаем исходную ссылку
+    return link
+    
 # ——————————————————————————————————————————————————————————
 #            ЛОГИРОВАНИЕ
 # ——————————————————————————————————————————————————————————
@@ -135,7 +168,7 @@ async def fetch_and_post_news(context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"[DEBUG] {url}: HTTP {resp.status_code}, entries={len(feed.entries)}")
             for entry in feed.entries:
                 t = entry.get('title','')
-                l = entry.get('link','')
+                l = extract_real_link(entry)
                 if not t or not l or l in posted_links: continue
                 if any(k in t.lower() for k in KEYWORDS):
                     # переводим всегда на русский
