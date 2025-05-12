@@ -87,7 +87,7 @@ RSS_FEEDS = [
     "https://gov.kz/rss",
     "https://www.kitco.com/news/rss",
     "http://feeds.feedburner.com/reuters/businessNews",
-    "https://www.gold.org/news/rss",
+    "https://www.gold.org/news",
     "https://www.mining.com/feed/",
     "https://www.statista.com/rss",
     "https://www.bloomberg.com/markets/economics/rss",
