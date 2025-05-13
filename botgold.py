@@ -144,11 +144,12 @@ def check_rss_feed(url):
 # ——————————————————————————————————————————————————————————
 #       СОЗДАНИЕ RSS-ФИДА ДЛЯ САЙТА БЕЗ RSS
 # ——————————————————————————————————————————————————————————
+
 def create_rss_feed(url, output_file):
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        soup = BeautifulSoup(response.text, 'lxml')
 
         # Универсальный селектор (адаптируйте под каждый сайт)
         articles = soup.select('.news-item, article, .post, .news, .article')  # Обновите селекторы
@@ -167,41 +168,27 @@ def create_rss_feed(url, output_file):
                 description_tag = article.find('p') or article.find('div', class_='summary')
                 description = description_tag.get_text(strip=True) if description_tag else 'No description'
 
-                from datetime import datetime
+                date_tag = article.find('time') or article.find('span', class_='date')
+                pub_date = datetime.now()
+               if date_tag:
+                    dt_text = date_tag.get('datetime') or date_tag.get_text(strip=True)
 
-date_tag = article.find('time') or article.find('span', class_='date')
-pub_date = datetime.now()
+                            date_formats = [
+                                '%Y-%m-%d',
+                                '%Y-%m-%dT%H:%M:%S',
+                                '%Y-%m-%dT%H:%M:%SZ',
+                                '%d.%m.%Y',
+                            ]
 
-if date_tag:
-    dt_text = date_tag.get('datetime') or date_tag.get_text(strip=True)
-
-    # Пробуем несколько форматов даты
-    date_formats = [
-        '%Y-%m-%d',                  # 2025-05-13
-        '%Y-%m-%dT%H:%M:%S',         # 2025-05-13T12:00:00
-        '%Y-%m-%dT%H:%M:%SZ',        # 2025-05-13T12:00:00Z
-        '%d.%m.%Y',                  # 13.05.2025
-    ]
-
-    for fmt in date_formats:
-        try:
-            pub_date = datetime.strptime(dt_text.rstrip('Z'), fmt)
-            break  # нашли подходящий формат — выходим
-        except ValueError:
-            continue  # пробуем следующий формат
-
-
-                item = Item(
-                    title=title,
-                    link=link,
-                    description=description,
-                    pubDate=pub_date,
-                    guid=Guid(link)
-                )
-                items.append(item)
-            except Exception as e:
-                logger.error(f"Ошибка при обработке статьи на {url}: {e}")
-
+                            for fmt in date_formats:
+                                try:
+                                    pub_date = datetime.strptime(dt_text.rstrip('Z'), fmt)
+                                    break
+                                except ValueError:
+                                    continue
+                    except Exception as e:
+                        logger.error(f"Ошибка при обработке статьи на {link}: {e}")
+                        
         feed = Feed(
             title=f"Новости с {url}",
             link=url,
