@@ -4,10 +4,12 @@ import urllib.parse
 import sqlite3
 import re
 from contextlib import closing
+from datetime import datetime
 
 import feedparser
 import requests
 from bs4 import BeautifulSoup
+from rfeed import Feed, Item, Guid
 from deep_translator import GoogleTranslator
 from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
@@ -97,6 +99,112 @@ RSS_FEEDS = [
 bot = Bot(token=TELEGRAM_TOKEN)
 translator = GoogleTranslator(source='auto', target='ru')
 
+# Папка для сгенерированных RSS-фидов
+FEEDS_DIR = 'feeds'
+if not os.path.exists(FEEDS_DIR):
+    os.makedirs(FEEDS_DIR)
+
+# ——————————————————————————————————————————————————————————
+#       ПРОВЕРКА НАЛИЧИЯ RSS-ФИДА
+# ——————————————————————————————————————————————————————————
+def check_rss_feed(url):
+    try:
+        feed = feedparser.parse(url)
+        if feed.entries:
+            return url
+    except:
+        pass
+
+    rss_suffixes = ['/rss', '/feed', '/rss.xml', '/feed.xml']
+    for suffix in rss_suffixes:
+        try:
+            feed_url = url.rstrip('/') + suffix
+            feed = feedparser.parse(feed_url)
+            if feed.entries:
+                return feed_url
+        except:
+            continue
+
+    try:
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        soup = BeautifulSoup(response.text, 'lxml')
+        rss_link = soup.find('link', type='application/rss+xml')
+        if rss_link and rss_link.get('href'):
+            feed_url = rss_link['href']
+            if not feed_url.startswith('http'):
+                feed_url = url.rstrip('/') + feed_url
+            feed = feedparser.parse(feed_url)
+            if feed.entries:
+                return feed_url
+    except:
+        pass
+
+    return None
+
+# ——————————————————————————————————————————————————————————
+#       СОЗДАНИЕ RSS-ФИДА ДЛЯ САЙТА БЕЗ RSS
+# ——————————————————————————————————————————————————————————
+def create_rss_feed(url, output_file):
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = requests.get(url, headers=headers)
+        soup = BeautifulSoup(response.text, 'lxml')
+
+        # Универсальный селектор (адаптируйте под каждый сайт)
+        articles = soup.select('.news-item, article, .post, .news, .article')  # Обновите селекторы
+        items = []
+
+        for article in articles[:10]:  # Ограничим до 10 новостей
+            try:
+                title_tag = article.find('h2') or article.find('h3') or article.find('a')
+                title = title_tag.get_text(strip=True) if title_tag else 'No title'
+
+                link_tag = article.find('a')
+                link = link_tag['href'] if link_tag else ''
+                if link and not link.startswith('http'):
+                    link = url.rstrip('/') + link
+
+                description_tag = article.find('p') or article.find('div', class_='summary')
+                description = description_tag.get_text(strip=True) if description_tag else 'No description'
+
+                date_tag = article.find('time') or article.find('span', class_='date')
+                pub_date = datetime.now()
+                if date_tag and date_tag.get('datetime'):
+                    pub_date = datetime.strptime(date_tag['datetime'], '%Y-%m-%d')
+                elif date_tag:
+                    try:
+                        pub_date = datetime.strptime(date_tag.get_text(strip=True), '%d.%m.%Y')
+                    except:
+                        pass
+
+                item = Item(
+                    title=title,
+                    link=link,
+                    description=description,
+                    pubDate=pub_date,
+                    guid=Guid(link)
+                )
+                items.append(item)
+            except Exception as e:
+                logger.error(f"Ошибка при обработке статьи на {url}: {e}")
+
+        feed = Feed(
+            title=f"Новости с {url}",
+            link=url,
+            description=f"RSS-фид, сгенерированный для {url}",
+            language="ru",
+            lastBuildDate=datetime.now(),
+            items=items
+        )
+
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(feed.rss())
+
+        return output_file
+    except Exception as e:
+        logger.error(f"Ошибка при создании RSS для {url}: {e}")
+        return None
+
 # ——————————————————————————————————————————————————————————
 #       ФУНКЦИЯ ФИЛЬТРАЦИИ ССЫЛОК
 # ——————————————————————————————————————————————————————————
@@ -148,11 +256,16 @@ async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Вы подписались! Отправляю последние новости…")
         count = 0
         for url in RSS_FEEDS:
+            rss_url = check_rss_feed(url)
+            if not rss_url:
+                logger.info(f"Создание RSS для {url}")
+                rss_file = os.path.join(FEEDS_DIR, f"{urllib.parse.quote(url, safe='')}.xml")
+                rss_url = create_rss_feed(url, rss_file) or rss_file
             try:
-                resp = requests.get(url, headers={'User-Agent':'Mozilla/5.0'})
+                resp = requests.get(rss_url, headers={'User-Agent': 'Mozilla/5.0'})
                 feed = feedparser.parse(resp.content)
                 for entry in feed.entries:
-                    t = entry.get('title','')
+                    t = entry.get('title', '')
                     l = extract_real_link(entry)
                     if not t or not l: continue
                     if any(k in t.lower() for k in KEYWORDS):
@@ -189,10 +302,16 @@ async def fetch_and_post_news(context: ContextTypes.DEFAULT_TYPE):
     logger.info("=== Запуск fetch_and_post_news ===")
     for url in RSS_FEEDS:
         try:
-            resp = requests.get(url, headers={'User-Agent':'Mozilla/5.0'})
+            rss_url = check_rss_feed(url)
+            if not rss_url:
+                logger.info(f"Создание RSS для {url}")
+                rss_file = os.path.join(FEEDS_DIR, f"{urllib.parse.quote(url, safe='')}.xml")
+                rss_url = create_rss_feed(url, rss_file) or rss_file
+            logger.info(f"Обработка фида: {rss_url}")
+            resp = requests.get(rss_url, headers={'User-Agent': 'Mozilla/5.0'})
             feed = feedparser.parse(resp.content)
             for entry in feed.entries:
-                t = entry.get('title','')
+                t = entry.get('title', '')
                 l = extract_real_link(entry)
                 if not t or not l or has_link(l): continue
                 if any(k in t.lower() for k in KEYWORDS):
