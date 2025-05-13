@@ -165,30 +165,30 @@ def create_rss_feed(url, output_file):
                 if link and not link.startswith('http'):
                     link = url.rstrip('/') + link
 
-                description_tag = article.find('p') or article.find('div', class_='summary')
+                               description_tag = article.find('p') or article.find('div', class_='summary')
                 description = description_tag.get_text(strip=True) if description_tag else 'No description'
 
                 date_tag = article.find('time') or article.find('span', class_='date')
                 pub_date = datetime.now()
-               if date_tag:
-                    dt_text = date_tag.get('datetime') or date_tag.get_text(strip=True)
+                if date_tag and date_tag.get('datetime'):
+                    pub_date = datetime.strptime(date_tag['datetime'], '%Y-%m-%d')
+                elif date_tag:
+                    try:
+                        pub_date = datetime.strptime(date_tag.get_text(strip=True), '%d.%m.%Y')
+                    except:
+                        pass
 
-                            date_formats = [
-                                '%Y-%m-%d',
-                                '%Y-%m-%dT%H:%M:%S',
-                                '%Y-%m-%dT%H:%M:%SZ',
-                                '%d.%m.%Y',
-                            ]
+                item = Item(
+                    title=title,
+                    link=link,
+                    description=description,
+                    pubDate=pub_date,
+                    guid=Guid(link)
+                )
+                items.append(item)
+            except Exception as e:
+                logger.error(f"Ошибка при обработке статьи на {url}: {e}")
 
-                            for fmt in date_formats:
-                                try:
-                                    pub_date = datetime.strptime(dt_text.rstrip('Z'), fmt)
-                                    break
-                                except ValueError:
-                                    continue
-                    except Exception as e:
-                        logger.error(f"Ошибка при обработке статьи на {link}: {e}")
-                        
         feed = Feed(
             title=f"Новости с {url}",
             link=url,
