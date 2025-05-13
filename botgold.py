@@ -144,7 +144,6 @@ def check_rss_feed(url):
 # ——————————————————————————————————————————————————————————
 #       СОЗДАНИЕ RSS-ФИДА ДЛЯ САЙТА БЕЗ RSS
 # ——————————————————————————————————————————————————————————
-
 def create_rss_feed(url, output_file):
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
@@ -165,7 +164,7 @@ def create_rss_feed(url, output_file):
                 if link and not link.startswith('http'):
                     link = url.rstrip('/') + link
 
-                               description_tag = article.find('p') or article.find('div', class_='summary')
+                description_tag = article.find('p') or article.find('div', class_='summary')
                 description = description_tag.get_text(strip=True) if description_tag else 'No description'
 
                 date_tag = article.find('time') or article.find('span', class_='date')
@@ -299,7 +298,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ——————————————————————————————————————————————————————————
 #         РАССЫЛКА СВЕЖИХ НОВОСТЕЙ
 # ——————————————————————————————————————————————————————————
-
 async def fetch_and_post_news(context: ContextTypes.DEFAULT_TYPE):
     logger.info("=== Запуск fetch_and_post_news ===")
     for url in RSS_FEEDS:
