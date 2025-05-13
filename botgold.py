@@ -148,7 +148,7 @@ def create_rss_feed(url, output_file):
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers)
-        soup = BeautifulSoup(response.text, 'lxml')
+        soup = BeautifulSoup(response.text, 'html.parser')
 
         # Универсальный селектор (адаптируйте под каждый сайт)
         articles = soup.select('.news-item, article, .post, .news, .article')  # Обновите селекторы
