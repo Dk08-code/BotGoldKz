@@ -298,6 +298,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ——————————————————————————————————————————————————————————
 #         РАССЫЛКА СВЕЖИХ НОВОСТЕЙ
 # ——————————————————————————————————————————————————————————
+
 async def fetch_and_post_news(context: ContextTypes.DEFAULT_TYPE):
     logger.info("=== Запуск fetch_and_post_news ===")
     for url in RSS_FEEDS:
@@ -307,13 +308,28 @@ async def fetch_and_post_news(context: ContextTypes.DEFAULT_TYPE):
                 logger.info(f"Создание RSS для {url}")
                 rss_file = os.path.join(FEEDS_DIR, f"{urllib.parse.quote(url, safe='')}.xml")
                 rss_url = create_rss_feed(url, rss_file) or rss_file
+
             logger.info(f"Обработка фида: {rss_url}")
-            resp = requests.get(rss_url, headers={'User-Agent': 'Mozilla/5.0'})
-            feed = feedparser.parse(resp.content)
+
+            # --- здесь начинается обновлённый код ---
+            if os.path.isfile(rss_url):
+                # читаем локально сгенерированный XML
+                with open(rss_url, 'rb') as f:
+                    raw = f.read()
+            else:
+                # делаем HTTP-запрос к настоящему RSS-URL
+                resp = requests.get(rss_url, headers={'User-Agent': 'Mozilla/5.0'})
+                resp.raise_for_status()
+                raw = resp.content
+
+            feed = feedparser.parse(raw)
+            # --- здесь заканчивается обновлённый код ---
+
             for entry in feed.entries:
                 t = entry.get('title', '')
                 l = extract_real_link(entry)
-                if not t or not l or has_link(l): continue
+                if not t or not l or has_link(l):
+                    continue
                 if any(k in t.lower() for k in KEYWORDS):
                     rt = translator.translate(t)
                     txt = f"{rt}\n{l}"
@@ -325,6 +341,7 @@ async def fetch_and_post_news(context: ContextTypes.DEFAULT_TYPE):
                     add_link(l)
         except Exception as e:
             logger.error(f"Ошибка фида {url}: {e}")
+
 
 # ——————————————————————————————————————————————————————————
 #             ЗАПУСК БОТА
