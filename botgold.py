@@ -150,11 +150,11 @@ def create_rss_feed(url, output_file):
         response = requests.get(url, headers=headers)
         soup = BeautifulSoup(response.text, 'lxml')
 
-        # Универсальный селектор (адаптируйте под каждый сайт)
-        articles = soup.select('.news-item, article, .post, .news, .article')  # Обновите селекторы
+        # Универсальный селектор (адаптируй под каждый сайт)
+        articles = soup.select('.news-item, article, .post, .news, .article')
         items = []
 
-        for article in articles[:10]:  # Ограничим до 10 новостей
+        for article in articles[:10]:
             try:
                 title_tag = article.find('h2') or article.find('h3') or article.find('a')
                 title = title_tag.get_text(strip=True) if title_tag else 'No title'
@@ -169,8 +169,19 @@ def create_rss_feed(url, output_file):
 
                 date_tag = article.find('time') or article.find('span', class_='date')
                 pub_date = datetime.now()
+
                 if date_tag and date_tag.get('datetime'):
-                    pub_date = datetime.strptime(date_tag['datetime'], '%Y-%m-%d')
+                    date_str = date_tag['datetime']
+                    try:
+                        if 'T' in date_str and 'Z' in date_str:
+                            # Пример: 2025-05-13T12:00:00Z
+                            date_str = date_str.replace('T', ' ').replace('Z', '')
+                            pub_date = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
+                        else:
+                            pub_date = datetime.strptime(date_str, '%Y-%m-%d')
+                    except Exception as e:
+                        logger.warning(f"Ошибка при разборе даты '{date_str}': {e}")
+                        pub_date = datetime.now()
                 elif date_tag:
                     try:
                         pub_date = datetime.strptime(date_tag.get_text(strip=True), '%d.%m.%Y')
